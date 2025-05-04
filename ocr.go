@@ -38,13 +38,17 @@ type HOCRCapable interface {
 }
 
 // ProcessDocumentOCR processes a document through OCR and returns the combined text, hOCR and PDF
-func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options OCROptions) (*ProcessedDocument, error) {
+// It now accepts OCROptions and an optional jobID for progress tracking.
+func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options OCROptions, jobID string) (*ProcessedDocument, error) {
 	// Validate options for safety
 	if !options.UploadPDF && options.ReplaceOriginal {
 		return nil, fmt.Errorf("invalid OCROptions: cannot set ReplaceOriginal=true when UploadPDF=false")
 	}
 
 	docLogger := documentLogger(documentID)
+	if jobID != "" {
+		docLogger = docLogger.WithField("job_id", jobID)
+	}
 	docLogger.Info("Starting OCR processing")
 
 	// Skip OCR if the document already has the OCR complete tag
@@ -60,8 +64,8 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 				docLogger.Infof("Document already has OCR complete tag '%s', skipping OCR processing", app.pdfOCRCompleteTag)
 				return &ProcessedDocument{
 					ID:   documentID,
-					Text: document.Content,
-				}, nil
+					Text: document.Content, // Return existing content if skipped
+				}, nil // Return nil error as it's not a failure
 			}
 		}
 	}
@@ -127,6 +131,11 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 		if result == nil {
 			pageLogger.Error("Got nil result from OCR provider")
 			return nil, fmt.Errorf("error performing OCR for document %d, page %d: nil result", documentID, i+1)
+		}
+
+		// Update job progress after each page if jobID is provided
+		if jobID != "" {
+			jobStore.updatePagesDone(jobID, i+1)
 		}
 
 		pageLogger.WithField("has_hocr_page", result.HOCRPage != nil).

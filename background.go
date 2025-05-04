@@ -198,6 +198,7 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 			}
 		}
 
+		// Setup OCR options based on app configuration for background processing
 		options := OCROptions{
 			UploadPDF:       app.pdfUpload,
 			ReplaceOriginal: app.pdfReplace,
@@ -205,20 +206,33 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 			LimitPages:      limitOcrPages,
 		}
 
-		processedDoc, err := app.ProcessDocumentOCR(ctx, document.ID, options)
+		// Call ProcessDocumentOCR with options and an empty jobID
+		processedDoc, err := app.ProcessDocumentOCR(ctx, document.ID, options, "")
 		if err != nil {
 			docLogger.Errorf("OCR processing failed: %v", err)
 			errs = append(errs, fmt.Errorf("document %d OCR error: %w", document.ID, err))
 			continue
 		}
+		if processedDoc == nil { // Handle potential nil return if skipped
+			docLogger.Info("OCR processing skipped for document")
+			continue
+		}
 		docLogger.Debug("OCR processing completed")
 
+		// Update the document with the OCR content and remove the autoOcrTag
 		err = app.Client.UpdateDocuments(ctx, []DocumentSuggestion{
 			{
 				ID:               document.ID,
 				OriginalDocument: document,
-				SuggestedContent: processedDoc.Text,
+				SuggestedContent: processedDoc.Text, // Use text from ProcessedDocument
 				RemoveTags:       []string{autoOcrTag},
+				// Add OCR complete tag if tagging is enabled and PDF wasn't uploaded (upload handles tagging)
+				AddTags: func() []string {
+					if app.pdfOCRTagging && !options.UploadPDF {
+						return []string{app.pdfOCRCompleteTag}
+					}
+					return nil
+				}(),
 			},
 		}, app.Database, false)
 		if err != nil {

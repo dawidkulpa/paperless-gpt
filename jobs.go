@@ -124,7 +124,7 @@ func processJob(app *App, job *Job) {
 
 	ctx := context.Background()
 
-	// Create OCR options from job options or app defaults
+	// Use job options if provided, otherwise use app defaults
 	options := job.Options
 	if (options == OCROptions{}) {
 		// Use app defaults if job options are not set
@@ -132,17 +132,24 @@ func processJob(app *App, job *Job) {
 			UploadPDF:       app.pdfUpload,
 			ReplaceOriginal: app.pdfReplace,
 			CopyMetadata:    app.pdfCopyMetadata,
-			LimitPages:      limitOcrPages,
+			LimitPages:      limitOcrPages, // Use global limit if not specified in job
 		}
 	}
 
-	processedDoc, err := app.ProcessDocumentOCR(ctx, job.DocumentID, options)
+	// Call ProcessDocumentOCR with options and the job ID
+	processedDoc, err := app.ProcessDocumentOCR(ctx, job.DocumentID, options, job.ID)
 	if err != nil {
 		logger.Errorf("Error processing document OCR for job %s: %v", job.ID, err)
 		jobStore.updateJobStatus(job.ID, "failed", err.Error())
 		return
 	}
+	if processedDoc == nil { // Handle case where OCR might be skipped (e.g., already tagged)
+		logger.Infof("OCR processing skipped for job %s (document %d)", job.ID, job.DocumentID)
+		jobStore.updateJobStatus(job.ID, "completed", "Skipped (already processed or other reason)")
+		return
+	}
 
+	// Update job status with the extracted text from ProcessedDocument
 	jobStore.updateJobStatus(job.ID, "completed", processedDoc.Text)
 	logger.Infof("Job completed: %s", job.ID)
 }
