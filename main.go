@@ -343,8 +343,10 @@ func main() {
 		api.POST("/documents/:id/ocr", app.submitOCRJobHandler)
 		api.GET("/documents/:id/ocr_pages", app.getOCRPagesHandler)
 		api.POST("/documents/:id/ocr_pages/:pageIndex/reocr", app.reOCRPageHandler)
+		api.DELETE("/documents/:id/ocr_pages/:pageIndex/reocr", app.cancelReOCRPageHandler) // Added route for cancelling re-OCR
 		api.GET("/jobs/ocr/:job_id", app.getJobStatusHandler)
 		api.GET("/jobs/ocr", app.getAllJobsHandler)
+		api.POST("/ocr/jobs/:job_id/stop", app.stopOCRJobHandler)
 
 		// Endpoint to see if user enabled OCR
 		api.GET("/experimental/ocr", func(c *gin.Context) {

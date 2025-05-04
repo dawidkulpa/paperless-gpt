@@ -18,13 +18,26 @@ const ExperimentalOCR: React.FC = () => {
   const [status, setStatus] = useState('');
   const [error, setError] = useState<string | null>('');
   const [pagesDone, setPagesDone] = useState(0);
+  const [totalPages, setTotalPages] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [documentDetails, setDocumentDetails] = useState<Document | null>(null);
   const [perPageResults, setPerPageResults] = useState<OCRPageResult[]>([]);
   const lastFetchedPagesDoneRef = useRef(0);
-  
+
   const [reOcrLoading, setReOcrLoading] = useState<{ [pageIdx: number]: boolean }>({});
   const [reOcrErrors, setReOcrErrors] = useState<{ [pageIdx: number]: string }>({});
+  const [reOcrAbortControllers, setReOcrAbortControllers] = useState<{ [pageIdx: number]: AbortController | null }>({});
+
+  // Stop OCR job
+  const stopOCRJob = async () => {
+    if (!jobId) return;
+    try {
+      await axios.post(`/api/ocr/jobs/${jobId}/stop`);
+      setStatus('Job cancelled by user.');
+    } catch (err) {
+      setError('Failed to stop OCR job.');
+    }
+  };
 
   const fetchDocumentDetails = useCallback(async () => {
     if (!documentId) return;
@@ -80,6 +93,7 @@ const ExperimentalOCR: React.FC = () => {
       const jobStatus = response.data.status;
       const newPagesDone = response.data.pages_done;
       setPagesDone(newPagesDone);
+      setTotalPages(response.data.total_pages ?? null);
 
       // Only fetch per-page results if new pages are done
       if (newPagesDone > lastFetchedPagesDoneRef.current) {
@@ -105,6 +119,8 @@ const ExperimentalOCR: React.FC = () => {
       } else if (jobStatus === 'failed') {
         setError(response.data.error);
         setStatus('OCR failed.');
+      } else if (jobStatus === 'cancelled') {
+        setStatus('Job cancelled by user.');
       } else {
         setStatus(`Job status: ${jobStatus}. This may take a few minutes.`);
         setTimeout(() => checkJobStatus(), refreshInterval);
@@ -149,15 +165,23 @@ const ExperimentalOCR: React.FC = () => {
     setReOcrLoading((prev) => ({ ...prev, [pageIdx]: true }));
     setReOcrErrors((prev) => ({ ...prev, [pageIdx]: "" }));
 
+    const controller = new AbortController();
+    setReOcrAbortControllers((prev) => ({ ...prev, [pageIdx]: controller }));
+
     try {
-      const response = await axios.post(`/api/documents/${documentId}/ocr_pages/${pageIdx}/reocr`);
-      // Update the perPageResults for this page
+      const response = await axios.post(
+        `/api/documents/${documentId}/ocr_pages/${pageIdx}/reocr`,
+        {},
+        { signal: controller.signal }
+      );
+      // Update the perPageResults for this page, including generationInfo
       setPerPageResults((prev) =>
         prev.map((res, idx) =>
           idx === pageIdx
             ? {
                 text: response.data.text,
                 ocrLimitHit: response.data.ocrLimitHit,
+                generationInfo: response.data.generationInfo,
               }
             : res
         )
@@ -166,13 +190,40 @@ const ExperimentalOCR: React.FC = () => {
       if (pageIdx + 1 > lastFetchedPagesDoneRef.current) {
         lastFetchedPagesDoneRef.current = pageIdx + 1;
       }
-    } catch (err) {
-      setReOcrErrors((prev) => ({
-        ...prev,
-        [pageIdx]: "Failed to re-OCR page.",
-      }));
+    } catch (err: any) {
+      if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') {
+        setReOcrErrors((prev) => ({
+          ...prev,
+          [pageIdx]: "Re-OCR cancelled.",
+        }));
+      } else {
+        setReOcrErrors((prev) => ({
+          ...prev,
+          [pageIdx]: "Failed to re-OCR page.",
+        }));
+      }
     } finally {
       setReOcrLoading((prev) => ({ ...prev, [pageIdx]: false }));
+      setReOcrAbortControllers((prev) => ({ ...prev, [pageIdx]: null }));
+    }
+  };
+
+  // Cancel re-OCR for a page
+  const handleCancelReOcrPage = async (pageIdx: number) => {
+    // Abort the original request for immediate UI feedback (optional but good UX)
+    const controller = reOcrAbortControllers[pageIdx];
+    if (controller) {
+      controller.abort();
+    }
+
+    // Send explicit cancellation request to the backend
+    try {
+      await axios.delete(`/api/documents/${documentId}/ocr_pages/${pageIdx}/reocr`);
+      // Optionally update status or log success, though the abort() above handles the error state
+      console.log(`Cancellation request sent for page ${pageIdx}`);
+    } catch (err) {
+      // Log error if the DELETE request itself fails, but don't overwrite the "Re-OCR cancelled" state
+      console.error(`Failed to send cancellation request for page ${pageIdx}:`, err);
     }
   };
 
@@ -220,17 +271,27 @@ const ExperimentalOCR: React.FC = () => {
         </button>
         {status && (
           <div className="mt-4 text-center text-gray-700 dark:text-gray-300">
-            {status.includes('in_progress') && (
+            {(status.includes('in_progress') || status.startsWith('Job status: pending') || status.startsWith('Job status: in_progress')) && (
               <span className="flex items-center justify-center">
                 <FaSpinner className="animate-spin mr-2" />
                 {status}
               </span>
             )}
-            {!status.includes('in_progress') && status}
+            {!status.includes('in_progress') && !status.startsWith('Job status: pending') && !status.startsWith('Job status: in_progress') && status}
             {pagesDone > 0 && (
               <div className="mt-2">
-                Pages processed: {pagesDone}
+                {totalPages && totalPages > 1
+                  ? `Pages processed: ${pagesDone} / ${totalPages}`
+                  : `Pages processed: ${pagesDone}`}
               </div>
+            )}
+            {jobId && (status.includes('in_progress') || status.startsWith('Job status: pending') || status.startsWith('Job status: in_progress')) && (
+              <button
+                onClick={stopOCRJob}
+                className="mt-4 bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded transition duration-200"
+              >
+                Stop Job
+              </button>
             )}
           </div>
         )}
@@ -239,7 +300,7 @@ const ExperimentalOCR: React.FC = () => {
             {error}
           </div>
         )}
-        {perPageResults.length > 0 && (
+        {perPageResults.length > 0 && totalPages && totalPages > 1 && (
           <div className="mt-6">
             <h2 className="text-2xl font-bold mb-4">Per-Page OCR Results:</h2>
             {perPageResults.map((page, idx) => (
@@ -291,20 +352,31 @@ const ExperimentalOCR: React.FC = () => {
                   {page.text}
                 </pre>
                 <div className="mt-2 flex flex-col sm:flex-row items-start sm:items-center gap-2">
-                  <button
-                    onClick={() => handleReOcrPage(idx)}
-                    className="bg-orange-600 hover:bg-orange-700 text-white font-semibold py-2 px-4 rounded transition duration-200"
-                    disabled={reOcrLoading[idx]}
-                  >
-                    {reOcrLoading[idx] ? (
-                      <span className="flex items-center">
-                        <FaSpinner className="animate-spin mr-2" />
-                        Re-OCRing...
-                      </span>
-                    ) : (
-                      'Re-OCR Page'
+                  <div className="flex flex-row items-center gap-2">
+                    <button
+                      onClick={() => handleReOcrPage(idx)}
+                      className="bg-orange-600 hover:bg-orange-700 text-white font-semibold py-2 px-4 rounded transition duration-200"
+                      disabled={reOcrLoading[idx]}
+                    >
+                      {reOcrLoading[idx] ? (
+                        <span className="flex items-center">
+                          <FaSpinner className="animate-spin mr-2" />
+                          Re-OCRing...
+                        </span>
+                      ) : (
+                        'Re-OCR Page'
+                      )}
+                    </button>
+                    {reOcrLoading[idx] && (
+                      <button
+                        onClick={() => handleCancelReOcrPage(idx)}
+                        className="bg-gray-500 hover:bg-gray-700 text-white font-semibold py-2 px-4 rounded transition duration-200"
+                        style={{ marginLeft: 8 }}
+                      >
+                        Cancel Re-OCR
+                      </button>
                     )}
-                  </button>
+                  </div>
                   {reOcrErrors[idx] && (
                     <span className="text-red-600 text-sm ml-2">{reOcrErrors[idx]}</span>
                   )}

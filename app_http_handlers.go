@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -185,11 +187,12 @@ func (app *App) getJobStatusHandler(c *gin.Context) {
 	}
 
 	response := gin.H{
-		"job_id":     job.ID,
-		"status":     job.Status,
-		"created_at": job.CreatedAt,
-		"updated_at": job.UpdatedAt,
-		"pages_done": job.PagesDone,
+		"job_id":      job.ID,
+		"status":      job.Status,
+		"created_at":  job.CreatedAt,
+		"updated_at":  job.UpdatedAt,
+		"pages_done":  job.PagesDone,
+		"total_pages": job.TotalPages,
 	}
 
 	if job.Status == "completed" {
@@ -224,6 +227,20 @@ func (app *App) getAllJobsHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, jobList)
+}
+
+// POST /api/ocr/jobs/:job_id/stop
+func (app *App) stopOCRJobHandler(c *gin.Context) {
+	jobID := c.Param("job_id")
+	jobCancellersMu.Lock()
+	cancel, exists := jobCancellers[jobID]
+	jobCancellersMu.Unlock()
+	if !exists {
+		c.JSON(404, gin.H{"error": "No running job with this ID"})
+		return
+	}
+	cancel()
+	c.Status(204)
 }
 
 // getDocumentHandler handles the retrieval of a document by its ID
@@ -310,13 +327,53 @@ func (app *App) reOCRPageHandler(c *gin.Context) {
 		return
 	}
 
-	result, err := app.ocrProvider.ProcessImage(c.Request.Context(), imageContent)
+	// Create a unique key for this re-OCR operation
+	cancelKey := fmt.Sprintf("%d-%d", parsedID, pageIdx)
 
-	if err != nil || result == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to re-OCR page"})
+	// Create a cancelable context for this specific operation
+	reOcrCtx, cancelReOcr := context.WithCancel(c.Request.Context())
+	defer cancelReOcr() // Ensure context is cancelled eventually if handler exits unexpectedly
+
+	// Store the cancel function
+	reOcrCancellersMu.Lock()
+	// Check if another re-ocr is already running for this page, cancel it if so
+	if existingCancel, ok := reOcrCancellers[cancelKey]; ok {
+		existingCancel()
+	}
+	reOcrCancellers[cancelKey] = cancelReOcr
+	reOcrCancellersMu.Unlock()
+
+	// Ensure the cancel function is removed from the map when this handler returns
+	defer func() {
+		reOcrCancellersMu.Lock()
+		delete(reOcrCancellers, cancelKey)
+		reOcrCancellersMu.Unlock()
+	}()
+
+	// Process the image using the cancelable context
+	result, err := app.ocrProvider.ProcessImage(reOcrCtx, imageContent)
+
+	// Check for errors, including cancellation
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			log.Infof("Re-OCR for doc %d page %d cancelled.", parsedID, pageIdx)
+			// Return a specific error or status for cancellation if needed,
+			// otherwise, the frontend request might just time out or receive a generic error.
+			// For now, let's return a 499 Client Closed Request status.
+			c.Status(499) // Client Closed Request
+		} else {
+			log.Errorf("Failed to re-OCR doc %d page %d: %v", parsedID, pageIdx, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to re-OCR page"})
+		}
+		return
+	}
+	if result == nil {
+		log.Errorf("Re-OCR for doc %d page %d returned nil result.", parsedID, pageIdx)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Re-OCR returned no result"})
 		return
 	}
 
+	// Save the result
 	var genInfoJSON string
 	if result.GenerationInfo != nil {
 		if b, err := json.Marshal(result.GenerationInfo); err == nil {
@@ -333,6 +390,42 @@ func (app *App) reOCRPageHandler(c *gin.Context) {
 		"ocrLimitHit":    result.OcrLimitHit,
 		"generationInfo": result.GenerationInfo,
 	})
+}
+
+// cancelReOCRPageHandler handles the DELETE request to cancel an ongoing re-OCR for a specific page.
+func (app *App) cancelReOCRPageHandler(c *gin.Context) {
+	id := c.Param("id")
+	pageIdxStr := c.Param("pageIndex")
+	parsedID, err := strconv.Atoi(id)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid document ID"})
+		return
+	}
+	pageIdx, err := strconv.Atoi(pageIdxStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid page index"})
+		return
+	}
+
+	cancelKey := fmt.Sprintf("%d-%d", parsedID, pageIdx)
+
+	reOcrCancellersMu.Lock()
+	cancel, exists := reOcrCancellers[cancelKey]
+	if exists {
+		// Remove the canceller *before* calling cancel, to prevent race conditions
+		// if the reOCRPageHandler tries to remove it simultaneously upon context cancellation.
+		delete(reOcrCancellers, cancelKey)
+	}
+	reOcrCancellersMu.Unlock() // Unlock before potentially long-running cancel()
+
+	if exists {
+		cancel() // Call the cancel function
+		log.Infof("Cancellation requested for re-OCR doc %d page %d", parsedID, pageIdx)
+		c.Status(http.StatusNoContent) // 204 No Content indicates success
+	} else {
+		log.Warnf("No active re-OCR found to cancel for doc %d page %d", parsedID, pageIdx)
+		c.JSON(http.StatusNotFound, gin.H{"error": "No active re-OCR operation found for this page"})
+	}
 }
 
 // Section for local-db actions

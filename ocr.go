@@ -105,10 +105,19 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 		return nil, fmt.Errorf("error downloading document images for document %d: %w", documentID, err)
 	}
 
-	// Log the page count information
+	// Set total pages on the job for UI, if jobID is provided
+	totalPages := len(imagePaths)
+	if jobID != "" {
+		jobStore.Lock()
+		if job, exists := jobStore.jobs[jobID]; exists {
+			job.TotalPages = totalPages
+		}
+		jobStore.Unlock()
+	}
+
 	docLogger.WithFields(logrus.Fields{
 		"processed_page_count": len(imagePaths),
-		"total_page_count":     totalPdfPages,
+		"total_page_count":     totalPdfPages, // Use original total for logging
 		"limit_pages":          pageLimit,
 	}).Debug("Downloaded document images")
 
@@ -117,6 +126,19 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 	var ocrResults []*ocr.OCRResult // Store results for potential DB saving
 
 	for i, imagePath := range imagePaths {
+		// Check for cancellation before processing each page
+		select {
+		case <-ctx.Done():
+			docLogger.Info("Job cancelled before processing page")
+			// Return partial results if cancelled
+			return &ProcessedDocument{
+				ID:   documentID,
+				Text: strings.Join(ocrTexts, "\n\n"),
+			}, ctx.Err()
+		default:
+			// Continue
+		}
+
 		pageLogger := docLogger.WithField("page", i+1)
 		pageLogger.Debug("Processing page")
 
