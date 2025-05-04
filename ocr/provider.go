@@ -20,6 +20,12 @@ type OCRResult struct {
 
 	// Additional provider-specific metadata
 	Metadata map[string]string
+
+	// Indicates if the OCR output hit the max token limit
+	OcrLimitHit bool
+
+	// LLM GenerationInfo (arbitrary metadata, per page)
+	GenerationInfo map[string]interface{}
 }
 
 // Provider defines the interface for OCR processing
@@ -31,6 +37,11 @@ type Provider interface {
 type Config struct {
 	// Provider type (e.g., "llm", "google_docai", "azure")
 	Provider string
+
+	// Ollama OCR-specific settings
+	OllamaOcrMaxTokensPerPage int
+	OllamaOcrTemperature      *float64
+	OllamaOcrTopK             *int
 
 	// Google Document AI settings
 	GoogleProjectID   string

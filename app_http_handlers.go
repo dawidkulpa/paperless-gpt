@@ -245,6 +245,96 @@ func (app *App) getDocumentHandler() gin.HandlerFunc {
 	}
 }
 
+// getOCRPagesHandler returns per-page OCR results for a document
+func (app *App) getOCRPagesHandler(c *gin.Context) {
+	id := c.Param("id")
+	parsedID, err := strconv.Atoi(id)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid document ID"})
+		return
+	}
+
+	dbResults, err := GetOcrPageResults(app.Database, parsedID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch OCR page results"})
+		return
+	}
+
+	type OCRPageResult struct {
+		Text           string                 `json:"text"`
+		OcrLimitHit    bool                   `json:"ocrLimitHit"`
+		GenerationInfo map[string]interface{} `json:"generationInfo,omitempty"`
+	}
+
+	var pages []OCRPageResult
+	for _, res := range dbResults {
+		var genInfo map[string]interface{}
+		if res.GenerationInfo != "" {
+			_ = json.Unmarshal([]byte(res.GenerationInfo), &genInfo)
+		}
+		pages = append(pages, OCRPageResult{
+			Text:           res.Text,
+			OcrLimitHit:    res.OcrLimitHit,
+			GenerationInfo: genInfo,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"pages": pages,
+	})
+}
+
+func (app *App) reOCRPageHandler(c *gin.Context) {
+	id := c.Param("id")
+	pageIdxStr := c.Param("pageIndex")
+	parsedID, err := strconv.Atoi(id)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid document ID"})
+		return
+	}
+	pageIdx, err := strconv.Atoi(pageIdxStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid page index"})
+		return
+	}
+
+	// Download all images for the document, but only process the requested page
+	imagePaths, err := app.Client.DownloadDocumentAsImages(c.Request.Context(), parsedID, limitOcrPages)
+	if err != nil || pageIdx < 0 || pageIdx >= len(imagePaths) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid page index or failed to download images"})
+		return
+	}
+	imageContent, err := os.ReadFile(imagePaths[pageIdx])
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read image file"})
+		return
+	}
+
+	result, err := app.ocrProvider.ProcessImage(c.Request.Context(), imageContent)
+
+	if err != nil || result == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to re-OCR page"})
+		return
+	}
+
+	var genInfoJSON string
+	if result.GenerationInfo != nil {
+		if b, err := json.Marshal(result.GenerationInfo); err == nil {
+			genInfoJSON = string(b)
+		}
+	}
+	saveErr := SaveSingleOcrPageResult(app.Database, parsedID, pageIdx, result.Text, result.OcrLimitHit, genInfoJSON)
+	if saveErr != nil {
+		log.Errorf("Failed to save re-OCR result for doc %d page %d: %v", parsedID, pageIdx, saveErr)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"text":           result.Text,
+		"ocrLimitHit":    result.OcrLimitHit,
+		"generationInfo": result.GenerationInfo,
+	})
+}
+
 // Section for local-db actions
 
 func (app *App) getModificationHistoryHandler(c *gin.Context) {

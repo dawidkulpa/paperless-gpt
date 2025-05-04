@@ -1,7 +1,14 @@
 import axios from 'axios';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
 import { FaSpinner } from 'react-icons/fa';
 import { Document, DocumentSuggestion } from './DocumentProcessor';
+import { Tooltip } from 'react-tooltip';
+
+type OCRPageResult = {
+  text: string;
+  ocrLimitHit: boolean;
+  generationInfo?: Record<string, any>;
+};
 
 const ExperimentalOCR: React.FC = () => {
   const refreshInterval = 1000; // Refresh interval in milliseconds
@@ -10,9 +17,14 @@ const ExperimentalOCR: React.FC = () => {
   const [ocrResult, setOcrResult] = useState('');
   const [status, setStatus] = useState('');
   const [error, setError] = useState<string | null>('');
-  const [pagesDone, setPagesDone] = useState(0); // New state for pages done
-  const [saving, setSaving] = useState(false); // New state for saving
-  const [documentDetails, setDocumentDetails] = useState<Document | null>(null); // New state for document details
+  const [pagesDone, setPagesDone] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const [documentDetails, setDocumentDetails] = useState<Document | null>(null);
+  const [perPageResults, setPerPageResults] = useState<OCRPageResult[]>([]);
+  const lastFetchedPagesDoneRef = useRef(0);
+  
+  const [reOcrLoading, setReOcrLoading] = useState<{ [pageIdx: number]: boolean }>({});
+  const [reOcrErrors, setReOcrErrors] = useState<{ [pageIdx: number]: string }>({});
 
   const fetchDocumentDetails = useCallback(async () => {
     if (!documentId) return;
@@ -26,16 +38,29 @@ const ExperimentalOCR: React.FC = () => {
     }
   }, [documentId]);
 
+  const fetchPerPageResults = useCallback(async () => {
+    if (!documentId) return;
+    try {
+      const response = await axios.get<{ pages: OCRPageResult[] }>(`/api/documents/${documentId}/ocr_pages`);
+      setPerPageResults(response.data.pages);
+    } catch (err) {
+      console.error("Error fetching per-page OCR results:", err);
+      setError("Failed to fetch per-page OCR results.");
+    }
+  }, [documentId]);
+
   const submitOCRJob = async () => {
     setStatus('');
     setError('');
     setJobId('');
     setOcrResult('');
-    setPagesDone(0); // Reset pages done
+    setPagesDone(0);
+    setPerPageResults([]);
+    lastFetchedPagesDoneRef.current = 0;
 
     try {
       setStatus('Fetching document details...');
-      await fetchDocumentDetails(); // Fetch document details before submitting the job
+      await fetchDocumentDetails();
 
       setStatus('Submitting OCR job...');
       const response = await axios.post(`/api/documents/${documentId}/ocr`);
@@ -53,22 +78,41 @@ const ExperimentalOCR: React.FC = () => {
     try {
       const response = await axios.get(`/api/jobs/ocr/${jobId}`);
       const jobStatus = response.data.status;
-      setPagesDone(response.data.pages_done); // Update pages done
+      const newPagesDone = response.data.pages_done;
+      setPagesDone(newPagesDone);
+
+      // Only fetch per-page results if new pages are done
+      if (newPagesDone > lastFetchedPagesDoneRef.current) {
+        await fetchPerPageResults();
+        lastFetchedPagesDoneRef.current = newPagesDone;
+      }
+
       if (jobStatus === 'completed') {
-        setOcrResult(response.data.result);
+        // Parse the result as JSON
+        let parsedResult: { combinedText: string; perPageResults: OCRPageResult[] } | null = null;
+        try {
+          parsedResult = JSON.parse(response.data.result);
+        } catch (e) {
+          setOcrResult(response.data.result);
+          setStatus('OCR completed successfully.');
+          return;
+        }
+        if (parsedResult) {
+          setOcrResult(parsedResult.combinedText);
+          setPerPageResults(parsedResult.perPageResults);
+        }
         setStatus('OCR completed successfully.');
       } else if (jobStatus === 'failed') {
         setError(response.data.error);
         setStatus('OCR failed.');
       } else {
         setStatus(`Job status: ${jobStatus}. This may take a few minutes.`);
-        // Automatically check again after a delay
-        setTimeout(checkJobStatus, refreshInterval);
+        setTimeout(() => checkJobStatus(), refreshInterval);
       }
     } catch (err) {
       console.error(err);
       setError('Failed to check job status.');
-    } 
+    }
   };
 
   const handleSaveContent = async () => {
@@ -81,7 +125,7 @@ const ExperimentalOCR: React.FC = () => {
       }
       const requestPayload: DocumentSuggestion = {
         id: documentId,
-        original_document: documentDetails, // Use fetched document details
+        original_document: documentDetails,
         suggested_content: ocrResult,
       };
 
@@ -95,9 +139,46 @@ const ExperimentalOCR: React.FC = () => {
     }
   };
 
-  // Start checking job status when jobId is set
+  // Re-OCR a single page
+  const handleReOcrPage = async (pageIdx: number) => {
+    if (!perPageResults[pageIdx]) {
+      setReOcrErrors((prev) => ({ ...prev, [pageIdx]: "Page data not available." }));
+      return;
+    }
+
+    setReOcrLoading((prev) => ({ ...prev, [pageIdx]: true }));
+    setReOcrErrors((prev) => ({ ...prev, [pageIdx]: "" }));
+
+    try {
+      const response = await axios.post(`/api/documents/${documentId}/ocr_pages/${pageIdx}/reocr`);
+      // Update the perPageResults for this page
+      setPerPageResults((prev) =>
+        prev.map((res, idx) =>
+          idx === pageIdx
+            ? {
+                text: response.data.text,
+                ocrLimitHit: response.data.ocrLimitHit,
+              }
+            : res
+        )
+      );
+      // After re-OCR, also update lastFetchedPagesDone if this page was not previously available
+      if (pageIdx + 1 > lastFetchedPagesDoneRef.current) {
+        lastFetchedPagesDoneRef.current = pageIdx + 1;
+      }
+    } catch (err) {
+      setReOcrErrors((prev) => ({
+        ...prev,
+        [pageIdx]: "Failed to re-OCR page.",
+      }));
+    } finally {
+      setReOcrLoading((prev) => ({ ...prev, [pageIdx]: false }));
+    }
+  };
+
   useEffect(() => {
     if (jobId) {
+      lastFetchedPagesDoneRef.current = 0; // Reset when new job starts
       checkJobStatus();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -158,9 +239,83 @@ const ExperimentalOCR: React.FC = () => {
             {error}
           </div>
         )}
+        {perPageResults.length > 0 && (
+          <div className="mt-6">
+            <h2 className="text-2xl font-bold mb-4">Per-Page OCR Results:</h2>
+            {perPageResults.map((page, idx) => (
+              <div key={idx} className="mb-6 border border-gray-300 dark:border-gray-700 rounded p-4 bg-white dark:bg-gray-900">
+                <div className="flex items-center mb-2">
+                  <span className="font-semibold mr-2">Page {idx + 1}</span>
+                  {page.ocrLimitHit && (
+                    <span className="ml-2 px-2 py-1 bg-yellow-200 text-yellow-800 rounded text-xs font-bold">
+                      Token Limit Hit
+                    </span>
+                  )}
+                  {page.generationInfo && Object.keys(page.generationInfo).length > 0 && (
+                    <>
+                      <span
+                        data-tooltip-id={`geninfo-tooltip-${idx}`}
+                        className="ml-3 cursor-pointer text-blue-600 hover:text-blue-800"
+                        tabIndex={0}
+                        aria-label="Show Generation Info"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="inline-block" width="18" height="18" fill="currentColor" viewBox="0 0 20 20">
+                          <path d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-12.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM9 9.25A1 1 0 0110 8.5h.01a1 1 0 01.99 1v4a1 1 0 01-2 0v-4z"/>
+                        </svg>
+                      </span>
+                      <Tooltip
+                        id={`geninfo-tooltip-${idx}`}
+                        place="top"
+                        className="!max-w-xs !text-xs"
+                        style={{ zIndex: 9999 }}
+                        clickable={true}
+                        render={() => (
+                          <div className="p-1">
+                            <table>
+                              <tbody>
+                                {Object.entries(page.generationInfo ?? {}).map(([key, value]) => (
+                                  <tr key={key}>
+                                    <td className="pr-2 font-semibold align-top">{key}:</td>
+                                    <td className="break-all">{typeof value === 'object' ? JSON.stringify(value) : String(value)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      />
+                    </>
+                  )}
+                </div>
+                <pre className="whitespace-pre-wrap bg-gray-50 dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-48">
+                  {page.text}
+                </pre>
+                <div className="mt-2 flex flex-col sm:flex-row items-start sm:items-center gap-2">
+                  <button
+                    onClick={() => handleReOcrPage(idx)}
+                    className="bg-orange-600 hover:bg-orange-700 text-white font-semibold py-2 px-4 rounded transition duration-200"
+                    disabled={reOcrLoading[idx]}
+                  >
+                    {reOcrLoading[idx] ? (
+                      <span className="flex items-center">
+                        <FaSpinner className="animate-spin mr-2" />
+                        Re-OCRing...
+                      </span>
+                    ) : (
+                      'Re-OCR Page'
+                    )}
+                  </button>
+                  {reOcrErrors[idx] && (
+                    <span className="text-red-600 text-sm ml-2">{reOcrErrors[idx]}</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
         {ocrResult && (
           <div className="mt-6">
-            <h2 className="text-2xl font-bold mb-4">OCR Result:</h2>
+            <h2 className="text-2xl font-bold mb-4">Combined OCR Result:</h2>
             <div className="bg-gray-50 dark:bg-gray-900 p-4 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-96">
               <pre className="whitespace-pre-wrap">{ocrResult}</pre>
             </div>

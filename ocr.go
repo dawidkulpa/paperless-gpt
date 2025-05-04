@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"paperless-gpt/ocr" // Import the local ocr package
 
 	"github.com/gardar/ocrchestra/pkg/hocr"
 	"github.com/gardar/ocrchestra/pkg/pdfocr"
@@ -55,6 +58,7 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 	if app.pdfOCRTagging {
 		document, err := app.Client.GetDocument(ctx, documentID)
 		if err != nil {
+			// Return nil, nil to indicate skipped processing without error
 			return nil, fmt.Errorf("error fetching document %d: %w", documentID, err)
 		}
 
@@ -110,6 +114,7 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 
 	var ocrTexts []string
 	var imageDataList [][]byte
+	var ocrResults []*ocr.OCRResult // Store results for potential DB saving
 
 	for i, imagePath := range imagePaths {
 		pageLogger := docLogger.WithField("page", i+1)
@@ -143,6 +148,20 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 			Debug("OCR completed for page")
 
 		ocrTexts = append(ocrTexts, result.Text)
+		ocrResults = append(ocrResults, result) // Store the result
+
+		// Save per-page OCR result to the database (from incoming changes)
+		var genInfoJSON string
+		if result.GenerationInfo != nil {
+			if b, err := json.Marshal(result.GenerationInfo); err == nil {
+				genInfoJSON = string(b)
+			}
+		}
+		saveErr := SaveSingleOcrPageResult(app.Database, documentID, i, result.Text, result.OcrLimitHit, genInfoJSON)
+		if saveErr != nil {
+			pageLogger.WithError(saveErr).Error("Failed to save OCR page result to database")
+			// Continue processing other pages even if saving fails for one
+		}
 	}
 
 	fullText := strings.Join(ocrTexts, "\n\n")

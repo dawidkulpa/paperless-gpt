@@ -1,7 +1,7 @@
 package main
 
 import (
-	"context"
+	"context" // Keep for potential future use, though not used in current logic
 	"os"
 	"sort"
 	"sync"
@@ -16,7 +16,7 @@ type Job struct {
 	ID         string
 	DocumentID int
 	Status     string // "pending", "in_progress", "completed", "failed"
-	Result     string // OCR result or error message
+	Result     string // OCR result (combined text) or error message
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 	PagesDone  int        // Number of pages processed
@@ -123,6 +123,12 @@ func processJob(app *App, job *Job) {
 	jobStore.updateJobStatus(job.ID, "in_progress", "")
 
 	ctx := context.Background()
+
+	// Delete old OCR page results for this document before starting new OCR
+	if err := DeleteOcrPageResults(app.Database, job.DocumentID); err != nil {
+		logger.Errorf("Failed to delete old OCR page results for document %d: %v", job.DocumentID, err)
+		// Continue processing even if deletion fails
+	}
 
 	// Use job options if provided, otherwise use app defaults
 	options := job.Options

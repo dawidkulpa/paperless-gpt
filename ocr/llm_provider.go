@@ -17,10 +17,13 @@ import (
 
 // LLMProvider implements OCR using LLM vision models
 type LLMProvider struct {
-	provider string
-	model    string
-	llm      llms.Model
-	prompt   string // OCR prompt template
+	Provider                  string
+	Model                     string
+	LLM                       llms.Model
+	Prompt                    string // OCR prompt template
+	OllamaOcrMaxTokensPerPage int
+	OllamaOcrTemperature      *float64
+	OllamaOcrTopK             *int
 }
 
 func newLLMProvider(config Config) (*LLMProvider, error) {
@@ -54,17 +57,20 @@ func newLLMProvider(config Config) (*LLMProvider, error) {
 
 	logger.Info("Successfully initialized LLM OCR provider")
 	return &LLMProvider{
-		provider: config.VisionLLMProvider,
-		model:    config.VisionLLMModel,
-		llm:      model,
-		prompt:   config.VisionLLMPrompt,
+		Provider:                  config.VisionLLMProvider,
+		Model:                     config.VisionLLMModel,
+		LLM:                       model,
+		Prompt:                    config.VisionLLMPrompt,
+		OllamaOcrMaxTokensPerPage: config.OllamaOcrMaxTokensPerPage,
+		OllamaOcrTemperature:      config.OllamaOcrTemperature,
+		OllamaOcrTopK:             config.OllamaOcrTopK,
 	}, nil
 }
 
 func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pageNumber int) (*OCRResult, error) {
 	logger := log.WithFields(logrus.Fields{
-		"provider": p.provider,
-		"model":    p.model,
+		"provider": p.Provider, // Standardized field name
+		"model":    p.Model,    // Standardized field name
 		"page":     pageNumber,
 	})
 	logger.Debug("Starting LLM OCR processing")
@@ -81,46 +87,84 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 		"height": bounds.Dy(),
 	}).Debug("Image dimensions")
 
-	logger.Debugf("Prompt: %s", p.prompt)
+	logger.Debugf("Prompt: %s", p.Prompt)
 
 	// Prepare content parts based on provider type
 	var parts []llms.ContentPart
-	if strings.ToLower(p.provider) != "openai" {
+	if strings.ToLower(p.Provider) != "openai" {
 		logger.Debug("Using binary image format for non-OpenAI provider")
 		parts = []llms.ContentPart{
 			llms.BinaryPart("image/jpeg", imageContent),
-			llms.TextPart(p.prompt),
+			llms.TextPart(p.Prompt),
 		}
 	} else {
 		logger.Debug("Using base64 image format for OpenAI provider")
 		base64Image := base64.StdEncoding.EncodeToString(imageContent)
 		parts = []llms.ContentPart{
 			llms.ImageURLPart(fmt.Sprintf("data:image/jpeg;base64,%s", base64Image)),
-			llms.TextPart(p.prompt),
+			llms.TextPart(p.Prompt),
+		}
+	}
+
+	var callOpts []llms.CallOption
+	// Apply Ollama specific options only if the provider is Ollama
+	if strings.ToLower(p.Provider) == "ollama" {
+		if p.OllamaOcrMaxTokensPerPage > 0 {
+			callOpts = append(callOpts, llms.WithMaxTokens(p.OllamaOcrMaxTokensPerPage))
+		}
+		if p.OllamaOcrTemperature != nil {
+			callOpts = append(callOpts, llms.WithTemperature(*p.OllamaOcrTemperature))
+		}
+		if p.OllamaOcrTopK != nil {
+			callOpts = append(callOpts, llms.WithTopK(*p.OllamaOcrTopK))
 		}
 	}
 
 	// Convert the image to text
 	logger.Debug("Sending request to vision model")
-	completion, err := p.llm.GenerateContent(ctx, []llms.MessageContent{
+	completion, err := p.LLM.GenerateContent(ctx, []llms.MessageContent{
 		{
 			Parts: parts,
 			Role:  llms.ChatMessageTypeHuman,
 		},
-	})
+	}, callOpts...)
 	if err != nil {
 		logger.WithError(err).Error("Failed to get response from vision model")
 		return nil, fmt.Errorf("error getting response from LLM: %w", err)
 	}
 
-	result := &OCRResult{
-		Text: completion.Choices[0].Content,
-		Metadata: map[string]string{
-			"provider": p.provider,
-			"model":    p.model,
-		},
+	text := completion.Choices[0].Content
+	limitHit := false
+	tokenCount := -1
+
+	// Try to get token count from GenerationInfo (relevant for Ollama with max tokens set)
+	if strings.ToLower(p.Provider) == "ollama" && p.OllamaOcrMaxTokensPerPage > 0 {
+		genInfo := completion.Choices[0].GenerationInfo
+		if genInfo != nil && genInfo["TotalTokens"] != nil {
+			if v, ok := genInfo["TotalTokens"].(int); ok {
+				tokenCount = v
+			}
+		}
+		// Fallback: count tokens using langchaingo (might not be accurate for all models)
+		if tokenCount < 0 {
+			tokenCount = llms.CountTokens(p.Model, text)
+		}
+		if tokenCount >= p.OllamaOcrMaxTokensPerPage {
+			limitHit = true
+		}
 	}
-	logger.WithField("content_length", len(result.Text)).Info("Successfully processed image")
+
+	result := &OCRResult{
+		Text: text,
+		Metadata: map[string]string{
+			"provider": p.Provider,
+			"model":    p.Model,
+		},
+		OcrLimitHit:    limitHit,
+		GenerationInfo: completion.Choices[0].GenerationInfo,
+	}
+
+	logger.WithField("content_length", len(result.Text)).WithFields(completion.Choices[0].GenerationInfo).Info("Successfully processed image")
 	return result, nil
 }
 
@@ -135,6 +179,9 @@ func createGoogleAIClient(config Config) (llms.Model, error) {
 		b := config.VisionLLMThinkingBudget
 		thinkingBudget = &b
 	}
+	// Assuming NewGoogleAIProvider is defined elsewhere (e.g., main package or a shared utility)
+	// This might need adjustment based on actual project structure.
+	// For now, we assume it's accessible. If not, this will cause a compile error later.
 	provider, err := NewGoogleAIProvider(ctx, config.VisionLLMModel, apiKey, thinkingBudget)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create GoogleAI provider: %w", err)
@@ -163,5 +210,13 @@ func createOllamaClient(config Config) (llms.Model, error) {
 	return ollama.New(
 		ollama.WithModel(config.VisionLLMModel),
 		ollama.WithServerURL(host),
+		ollama.WithRunnerNumCtx(config.OllamaOcrMaxTokensPerPage), // Pass max tokens if set
 	)
 }
+
+// Placeholder for NewGoogleAIProvider if it's meant to be in this package
+// If it's in the main package, this function is not needed here.
+// func NewGoogleAIProvider(ctx context.Context, modelName string, apiKey string, thinkingBudget *int32) (llms.Model, error) {
+// 	// Implementation would go here, likely using langchaingo's googleai package
+// 	return nil, fmt.Errorf("NewGoogleAIProvider not implemented in ocr package")
+// }

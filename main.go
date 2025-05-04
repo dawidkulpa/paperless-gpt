@@ -210,7 +210,6 @@ func main() {
 
 	ocrPrompt := promptBuffer.String()
 
-	// Parse VISION_LLM_THINKING_BUDGET from environment
 	var visionLlmThinkingBudget int32 = 0
 	if budgetStr := os.Getenv("VISION_LLM_THINKING_BUDGET"); budgetStr != "" {
 		if parsed, err := strconv.ParseInt(budgetStr, 10, 32); err == nil {
@@ -218,22 +217,52 @@ func main() {
 		}
 	}
 
+	var ollamaOcrMaxTokensPerPage int
+	if tokensPerPageStr := os.Getenv("OLLAMA_OCR_MAX_TOKENS_PER_PAGE"); tokensPerPageStr != "" {
+		if parsed, err := strconv.Atoi(tokensPerPageStr); err == nil {
+			ollamaOcrMaxTokensPerPage = parsed
+		} else {
+			log.Warnf("Invalid OLLAMA_OCR_MAX_TOKENS_PER_PAGE value: %v, using default (0)", err)
+		}
+	}
+
+	var ollamaOcrTemperature *float64
+	if tempStr := os.Getenv("OLLAMA_OCR_TEMPERATURE"); tempStr != "" {
+		if parsed, err := strconv.ParseFloat(tempStr, 64); err == nil {
+			ollamaOcrTemperature = &parsed
+		} else {
+			log.Warnf("Invalid OLLAMA_OCR_TEMPERATURE value: %v, ignoring", err)
+		}
+	}
+
+	var ollamaOcrTopK *int
+	if topKStr := os.Getenv("OLLAMA_OCR_TOP_K"); topKStr != "" {
+		if parsed, err := strconv.Atoi(topKStr); err == nil {
+			ollamaOcrTopK = &parsed
+		} else {
+			log.Warnf("Invalid OLLAMA_OCR_TOP_K value: %v, ignoring", err)
+		}
+	}
+
 	ocrConfig := ocr.Config{
-		Provider:                 providerType,
-		GoogleProjectID:          os.Getenv("GOOGLE_PROJECT_ID"),
-		GoogleLocation:           os.Getenv("GOOGLE_LOCATION"),
-		GoogleProcessorID:        os.Getenv("GOOGLE_PROCESSOR_ID"),
-		VisionLLMProvider:        visionLlmProvider,
-		VisionLLMModel:           visionLlmModel,
-		VisionLLMPrompt:          ocrPrompt,
-		VisionLLMThinkingBudget:  visionLlmThinkingBudget,
-		AzureEndpoint:            azureDocAIEndpoint,
-		AzureAPIKey:              azureDocAIKey,
-		AzureModelID:             azureDocAIModelID,
-		AzureOutputContentFormat: AzureDocAIOutputContentFormat,
-		DoclingURL:               doclingURL,
-		DoclingImageExportMode:   doclingImageExportMode,
-		EnableHOCR:               true, // Always generate hOCR struct if provider supports it
+		Provider:                  providerType,
+		OllamaOcrMaxTokensPerPage: ollamaOcrMaxTokensPerPage,
+		OllamaOcrTemperature:      ollamaOcrTemperature,
+		OllamaOcrTopK:             ollamaOcrTopK,
+		GoogleProjectID:           os.Getenv("GOOGLE_PROJECT_ID"),
+		GoogleLocation:            os.Getenv("GOOGLE_LOCATION"),
+		GoogleProcessorID:         os.Getenv("GOOGLE_PROCESSOR_ID"),
+		VisionLLMProvider:         visionLlmProvider,
+		VisionLLMModel:            visionLlmModel,
+		VisionLLMPrompt:           ocrPrompt,
+		VisionLLMThinkingBudget:   visionLlmThinkingBudget,
+		AzureEndpoint:             azureDocAIEndpoint,
+		AzureAPIKey:               azureDocAIKey,
+		AzureModelID:              azureDocAIModelID,
+		AzureOutputContentFormat:  AzureDocAIOutputContentFormat,
+		DoclingURL:                doclingURL,
+		DoclingImageExportMode:    doclingImageExportMode,
+		EnableHOCR:                true, // Always generate hOCR struct if provider supports it
 	}
 
 	// Parse Azure timeout if set
@@ -312,6 +341,8 @@ func main() {
 
 		// OCR endpoints
 		api.POST("/documents/:id/ocr", app.submitOCRJobHandler)
+		api.GET("/documents/:id/ocr_pages", app.getOCRPagesHandler)
+		api.POST("/documents/:id/ocr_pages/:pageIndex/reocr", app.reOCRPageHandler)
 		api.GET("/jobs/ocr/:job_id", app.getJobStatusHandler)
 		api.GET("/jobs/ocr", app.getAllJobsHandler)
 
@@ -754,7 +785,8 @@ func createLLM() (llms.Model, error) {
 				thinkingBudget = &b
 			}
 		}
-		provider, err := ocr.NewGoogleAIProvider(ctx, llmModel, apiKey, thinkingBudget)
+		// Note: Using the NewGoogleAIProvider defined in this file
+		provider, err := NewGoogleAIProvider(ctx, llmModel, apiKey, thinkingBudget)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create GoogleAI provider: %w", err)
 		}
