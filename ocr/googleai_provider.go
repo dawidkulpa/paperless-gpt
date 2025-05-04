@@ -1,4 +1,4 @@
-package main
+package ocr
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"google.golang.org/genai"
 )
 
-// GoogleAIProvider implements the LLMProvider interface for Google Gemini API using google.golang.org/genai
+// GoogleAIProvider implements the llms.Model interface for Google Gemini API using google.golang.org/genai
 type GoogleAIProvider struct {
 	client         *genai.Client
 	thinkingBudget *int32
@@ -63,35 +63,84 @@ func (p *GoogleAIProvider) GenerateText(ctx context.Context, prompt string) (str
 		return "", fmt.Errorf("googleai GenerateContent API returned empty response")
 	}
 
-	return resp.Candidates[0].Content.Parts[0].Text, nil
+	content := ""
+	if resp != nil &&
+		len(resp.Candidates) > 0 &&
+		resp.Candidates[0] != nil &&
+		resp.Candidates[0].Content != nil &&
+		len(resp.Candidates[0].Content.Parts) > 0 &&
+		resp.Candidates[0].Content.Parts[0] != nil &&
+		resp.Candidates[0].Content.Parts[0].Text != "" {
+		content = resp.Candidates[0].Content.Parts[0].Text
+	}
+	return content, nil
 }
 
-// Close closes any resources held by the provider
-func (p *GoogleAIProvider) Close() error {
-	// The genai.Client does not have a Close method, so nothing to do here
-	return nil
-}
-
-/*
-GenerateContent implements the llms.Model interface for GoogleAIProvider.
-It adapts a single-message prompt to the Google Gemini API and wraps the result.
-*/
+// GenerateContent implements the llms.Model interface for GoogleAIProvider.
+// This version supports multimodal (image + text) input for Gemini vision models.
 func (p *GoogleAIProvider) GenerateContent(ctx context.Context, messages []llms.MessageContent, opts ...llms.CallOption) (*llms.ContentResponse, error) {
 	if len(messages) == 0 || len(messages[0].Parts) == 0 {
 		return nil, fmt.Errorf("no prompt provided")
 	}
-	textPart, ok := messages[0].Parts[0].(llms.TextContent)
-	if !ok {
-		return nil, fmt.Errorf("first message part is not TextContent")
+
+	// Convert llms.ContentPart to []*genai.Part
+	var genaiParts []*genai.Part
+	for _, part := range messages[0].Parts {
+		switch v := part.(type) {
+		case llms.TextContent:
+			genaiParts = append(genaiParts, &genai.Part{Text: v.Text})
+		case llms.BinaryContent:
+			genaiParts = append(genaiParts, &genai.Part{
+				InlineData: &genai.Blob{
+					MIMEType: v.MIMEType,
+					Data:     v.Data,
+				},
+			})
+		default:
+			return nil, fmt.Errorf("unsupported content part type for GoogleAIProvider: %T", v)
+		}
 	}
-	result, err := p.GenerateText(ctx, textPart.Text)
+
+	// Wrap parts in a single Content
+	contents := []*genai.Content{
+		{
+			Parts: genaiParts,
+		},
+	}
+
+	var genConfig *genai.GenerateContentConfig
+	if p.thinkingBudget != nil {
+		genConfig = &genai.GenerateContentConfig{
+			ThinkingConfig: &genai.ThinkingConfig{
+				ThinkingBudget: genai.Ptr(*p.thinkingBudget),
+			},
+		}
+	}
+
+	resp, err := p.client.Models.GenerateContent(ctx, p.model, contents, genConfig)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("googleai GenerateContent API error: %w", err)
 	}
+
+	if resp == nil || len(resp.Candidates) == 0 {
+		return nil, fmt.Errorf("googleai GenerateContent API returned empty response")
+	}
+
+	content := ""
+	if resp != nil &&
+		len(resp.Candidates) > 0 &&
+		resp.Candidates[0] != nil &&
+		resp.Candidates[0].Content != nil &&
+		len(resp.Candidates[0].Content.Parts) > 0 &&
+		resp.Candidates[0].Content.Parts[0] != nil &&
+		resp.Candidates[0].Content.Parts[0].Text != "" {
+		content = resp.Candidates[0].Content.Parts[0].Text
+	}
+
 	return &llms.ContentResponse{
 		Choices: []*llms.ContentChoice{
 			{
-				Content: result,
+				Content: content,
 			},
 		},
 	}, nil

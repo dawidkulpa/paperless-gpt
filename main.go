@@ -210,6 +210,14 @@ func main() {
 
 	ocrPrompt := promptBuffer.String()
 
+	// Parse VISION_LLM_THINKING_BUDGET from environment
+	var visionLlmThinkingBudget int32 = 0
+	if budgetStr := os.Getenv("VISION_LLM_THINKING_BUDGET"); budgetStr != "" {
+		if parsed, err := strconv.ParseInt(budgetStr, 10, 32); err == nil {
+			visionLlmThinkingBudget = int32(parsed)
+		}
+	}
+
 	ocrConfig := ocr.Config{
 		Provider:                 providerType,
 		GoogleProjectID:          os.Getenv("GOOGLE_PROJECT_ID"),
@@ -218,6 +226,7 @@ func main() {
 		VisionLLMProvider:        visionLlmProvider,
 		VisionLLMModel:           visionLlmModel,
 		VisionLLMPrompt:          ocrPrompt,
+		VisionLLMThinkingBudget:  visionLlmThinkingBudget,
 		AzureEndpoint:            azureDocAIEndpoint,
 		AzureAPIKey:              azureDocAIKey,
 		AzureModelID:             azureDocAIModelID,
@@ -455,8 +464,8 @@ func validateOrDefaultEnvVars() {
 		log.Fatal("Please set the LLM_PROVIDER environment variable.")
 	}
 
-	if visionLlmProvider != "" && visionLlmProvider != "openai" && visionLlmProvider != "ollama" {
-		log.Fatal("Please set the VISION_LLM_PROVIDER environment variable to 'openai' or 'ollama'.")
+	if visionLlmProvider != "" && visionLlmProvider != "openai" && visionLlmProvider != "ollama" && visionLlmProvider != "googleai" {
+		log.Fatal("Please set the VISION_LLM_PROVIDER environment variable to 'openai', 'ollama', or 'googleai'.")
 	}
 	if llmProvider != "openai" && llmProvider != "ollama" && llmProvider != "googleai" {
 		log.Fatal("Please set the LLM_PROVIDER environment variable to 'openai', 'ollama', or 'googleai'.")
@@ -745,7 +754,7 @@ func createLLM() (llms.Model, error) {
 				thinkingBudget = &b
 			}
 		}
-		provider, err := NewGoogleAIProvider(ctx, llmModel, apiKey, thinkingBudget)
+		provider, err := ocr.NewGoogleAIProvider(ctx, llmModel, apiKey, thinkingBudget)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create GoogleAI provider: %w", err)
 		}

@@ -38,9 +38,10 @@ type Config struct {
 	GoogleProcessorID string
 
 	// LLM settings (from existing config)
-	VisionLLMProvider string
-	VisionLLMModel    string
-	VisionLLMPrompt   string
+	VisionLLMProvider       string
+	VisionLLMModel          string
+	VisionLLMPrompt         string
+	VisionLLMThinkingBudget int32 // Budget for Gemini/GoogleAI vision models
 
 	// Azure Document Intelligence settings
 	AzureEndpoint            string

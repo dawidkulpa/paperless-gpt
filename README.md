@@ -165,8 +165,10 @@ services:
       # OCR Configuration - Choose one:
       # Option 1: LLM-based OCR
       OCR_PROVIDER: "llm" # Default OCR provider
-      VISION_LLM_PROVIDER: "ollama" # openai or ollama
-      VISION_LLM_MODEL: "minicpm-v" # minicpm-v (ollama) or gpt-4o (openai)
+      VISION_LLM_PROVIDER: "googleai" # googleai, openai, or ollama
+      VISION_LLM_MODEL: "gemini-2.5-flash-preview-04-17" # e.g. gemini-2.5-flash-preview-04-17 for Gemini, gpt-4o (openai), minicpm-v (ollama)
+      VISION_LLM_THINKING_BUDGET: "0" # Optional, integer. Controls Gemini "thinking" budget. 0 disables, unset uses model default.
+      GOOGLEAI_API_KEY: "your_google_gemini_api_key" # Required if using googleai
       OLLAMA_HOST: "http://host.docker.internal:11434" # If using Ollama
 
       # Option 2: Google Document AI
@@ -257,7 +259,7 @@ paperless-gpt supports four different OCR providers, each with unique strengths 
 
 ### 1. LLM-based OCR (Default)
 - **Key Features**:
-  - Uses vision-capable LLMs like gpt-4o or MiniCPM-V
+  - Uses vision-capable LLMs like Gemini (googleai), gpt-4o (OpenAI), or MiniCPM-V (Ollama)
   - High accuracy with complex layouts and difficult scans
   - Context-aware text recognition
   - Self-correcting capabilities for OCR errors
@@ -268,8 +270,10 @@ paperless-gpt supports four different OCR providers, each with unique strengths 
 - **Configuration**:
   ```yaml
   OCR_PROVIDER: "llm"
-  VISION_LLM_PROVIDER: "openai" # or "ollama"
-  VISION_LLM_MODEL: "gpt-4o" # or "minicpm-v"
+  VISION_LLM_PROVIDER: "googleai" # or "openai", "ollama"
+  VISION_LLM_MODEL: "gemini-2.5-flash-preview-04-17" # or "gpt-4o", "minicpm-v"
+  VISION_LLM_THINKING_BUDGET: "0" # Optional, for Gemini models
+  GOOGLEAI_API_KEY: "your_google_gemini_api_key" # Required if using googleai
   ```
 
 ### 2. Azure Document Intelligence
@@ -452,13 +456,14 @@ For best results with the enhanced OCR features:
 | `OPENAI_API_KEY`                 | OpenAI API key (required if using OpenAI).                                                                       | Cond.    |                        |
 | `OPENAI_API_TYPE`                | Set to `azure` to use Azure OpenAI Service.                                                                      | No       |                        |
 | `OPENAI_BASE_URL`                | Base URL for OpenAI API. For Azure OpenAI, set to your deployment URL (e.g., `https://your-resource.openai.azure.com`). For custom endpoints (like LiteLLM), set this URL. | No       |                        |
-| `GOOGLEAI_API_KEY`               | Google Gemini API key (required if using `LLM_PROVIDER=googleai`).                                               | Cond.    |                        |
-| `GOOGLEAI_THINKING_BUDGET`       | (Optional, googleai only) Integer. Controls Gemini "thinking" budget. If unset, model default is used (thinking enabled if supported). Set to `0` to disable thinking (if model supports it). | No |                        |
+| `GOOGLEAI_API_KEY`               | Google Gemini API key (required if using `googleai` for LLM or vision OCR).                                      | Cond.    |                        |
+| `GOOGLEAI_THINKING_BUDGET`       | (Optional, googleai only) Integer. Controls Gemini "thinking" budget for main LLM. If unset, model default is used. Set to `0` to disable thinking. | No |                        |
 | `LLM_LANGUAGE`                   | Likely language for documents (e.g. `English`).                                                                  | No       | English                |
 | `OLLAMA_HOST`                    | Ollama server URL (e.g. `http://host.docker.internal:11434`).                                                    | No       |                        |
 | `OCR_PROVIDER`                   | OCR provider to use (`llm`, `azure`, `google_docai`, or `docling`).                                              | No       | llm                    |
-| `VISION_LLM_PROVIDER`            | AI backend for LLM OCR (`openai` or `ollama`). Required if OCR_PROVIDER is `llm`.                                | Cond.    |                        |
-| `VISION_LLM_MODEL`               | Model name for LLM OCR (e.g. `minicpm-v`). Required if OCR_PROVIDER is `llm`.                                    | Cond.    |                        |
+| `VISION_LLM_PROVIDER`            | AI backend for LLM OCR (`googleai`, `openai` or `ollama`). Required if OCR_PROVIDER is `llm`.                    | Cond.    |                        |
+| `VISION_LLM_MODEL`               | Model name for LLM OCR (e.g. `gemini-2.5-flash-preview-04-17`, `gpt-4o`, `minicpm-v`). Required if OCR_PROVIDER is `llm`. | Cond.    |                        |
+| `VISION_LLM_THINKING_BUDGET`     | (Optional, googleai only) Integer. Controls Gemini "thinking" budget for vision OCR. 0 disables, unset uses model default. | No       |                        |
 | `AZURE_DOCAI_ENDPOINT`           | Azure Document Intelligence endpoint. Required if OCR_PROVIDER is `azure`.                                        | Cond.    |                        |
 | `AZURE_DOCAI_KEY`                | Azure Document Intelligence API key. Required if OCR_PROVIDER is `azure`.                                         | Cond.    |                        |
 | `AZURE_DOCAI_MODEL_ID`           | Azure Document Intelligence model ID. Optional if using `azure` provider.                                         | No       | prebuilt-read          |

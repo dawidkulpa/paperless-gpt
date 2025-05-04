@@ -9,8 +9,6 @@ import (
 	"os"
 	"strings"
 
-	_ "image/jpeg"
-
 	"github.com/sirupsen/logrus"
 	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/llms/ollama"
@@ -42,6 +40,9 @@ func newLLMProvider(config Config) (*LLMProvider, error) {
 	case "ollama":
 		logger.Debug("Initializing Ollama vision model")
 		model, err = createOllamaClient(config)
+	case "googleai":
+		logger.Debug("Initializing GoogleAI vision model")
+		model, err = createGoogleAIClient(config)
 	default:
 		return nil, fmt.Errorf("unsupported vision LLM provider: %s", config.VisionLLMProvider)
 	}
@@ -121,6 +122,24 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 	}
 	logger.WithField("content_length", len(result.Text)).Info("Successfully processed image")
 	return result, nil
+}
+
+func createGoogleAIClient(config Config) (llms.Model, error) {
+	apiKey := os.Getenv("GOOGLEAI_API_KEY")
+	if apiKey == "" {
+		return nil, fmt.Errorf("GOOGLEAI_API_KEY environment variable is not set")
+	}
+	ctx := context.Background()
+	var thinkingBudget *int32
+	if config.VisionLLMThinkingBudget != 0 {
+		b := config.VisionLLMThinkingBudget
+		thinkingBudget = &b
+	}
+	provider, err := NewGoogleAIProvider(ctx, config.VisionLLMModel, apiKey, thinkingBudget)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GoogleAI provider: %w", err)
+	}
+	return provider, nil
 }
 
 // createOpenAIClient creates a new OpenAI vision model client
