@@ -20,6 +20,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 	"github.com/tmc/langchaingo/llms"
+	"github.com/tmc/langchaingo/llms/googleai"
 	"github.com/tmc/langchaingo/llms/ollama"
 	"github.com/tmc/langchaingo/llms/openai"
 	"gorm.io/gorm"
@@ -455,7 +456,10 @@ func validateOrDefaultEnvVars() {
 	}
 
 	if visionLlmProvider != "" && visionLlmProvider != "openai" && visionLlmProvider != "ollama" {
-		log.Fatal("Please set the LLM_PROVIDER environment variable to 'openai' or 'ollama'.")
+		log.Fatal("Please set the VISION_LLM_PROVIDER environment variable to 'openai' or 'ollama'.")
+	}
+	if llmProvider != "openai" && llmProvider != "ollama" && llmProvider != "googleai" {
+		log.Fatal("Please set the LLM_PROVIDER environment variable to 'openai', 'ollama', or 'googleai'.")
 	}
 
 	// Validate OCR provider if set
@@ -670,6 +674,22 @@ func loadTemplates() {
 	}
 }
 
+// NewGoogleAIProvider creates a new Google AI LLM provider.
+// Note: This is a basic implementation based on the langchaingo structure.
+// Adjustments might be needed depending on the exact langchaingo API.
+func NewGoogleAIProvider(ctx context.Context, modelName string, apiKey string, thinkingBudget *int32) (llms.Model, error) {
+	opts := []googleai.Option{
+		googleai.WithAPIKey(apiKey),
+		googleai.WithDefaultModel(modelName),
+	}
+	// Assuming langchaingo's googleai package handles the thinking budget via options if available.
+	// If not, this part might need adjustment based on the library's specifics.
+	// if thinkingBudget != nil {
+	// 	// Add option for thinking budget if the library supports it
+	// }
+	return googleai.New(ctx, opts...)
+}
+
 // createLLM creates the appropriate LLM client based on the provider
 func createLLM() (llms.Model, error) {
 	switch strings.ToLower(llmProvider) {
@@ -684,6 +704,7 @@ func createLLM() (llms.Model, error) {
 			openai.WithHTTPClient(createCustomHTTPClient()),
 		}
 
+		// Handle Azure OpenAI specifically
 		if strings.ToLower(os.Getenv("OPENAI_API_TYPE")) == "azure" {
 			baseURL := os.Getenv("OPENAI_BASE_URL")
 			if baseURL == "" {
@@ -693,6 +714,12 @@ func createLLM() (llms.Model, error) {
 				openai.WithAPIType(openai.APITypeAzure),
 				openai.WithBaseURL(baseURL),
 			)
+		} else {
+			// Handle generic OpenAI-compatible endpoints (like LiteLLM)
+			baseURL := os.Getenv("OPENAI_BASE_URL")
+			if baseURL != "" {
+				options = append(options, openai.WithBaseURL(baseURL))
+			}
 		}
 
 		return openai.New(options...)
@@ -705,8 +732,26 @@ func createLLM() (llms.Model, error) {
 			ollama.WithModel(llmModel),
 			ollama.WithServerURL(host),
 		)
+	case "googleai":
+		ctx := context.Background()
+		apiKey := os.Getenv("GOOGLEAI_API_KEY")
+		if apiKey == "" {
+			return nil, fmt.Errorf("GOOGLEAI_API_KEY is required for Google AI provider")
+		}
+		var thinkingBudget *int32
+		if val, ok := os.LookupEnv("GOOGLEAI_THINKING_BUDGET"); ok {
+			if v, err := strconv.Atoi(val); err == nil {
+				b := int32(v)
+				thinkingBudget = &b
+			}
+		}
+		provider, err := NewGoogleAIProvider(ctx, llmModel, apiKey, thinkingBudget)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create GoogleAI provider: %w", err)
+		}
+		return provider, nil
 	default:
-		return nil, fmt.Errorf("unsupported LLM provider: %s", llmProvider)
+		return nil, fmt.Errorf("unsupported LLM provider: %s (supported: openai, ollama, googleai)", llmProvider)
 	}
 }
 
@@ -723,6 +768,7 @@ func createVisionLLM() (llms.Model, error) {
 			openai.WithHTTPClient(createCustomHTTPClient()),
 		}
 
+		// Handle Azure OpenAI specifically
 		if strings.ToLower(os.Getenv("OPENAI_API_TYPE")) == "azure" {
 			baseURL := os.Getenv("OPENAI_BASE_URL")
 			if baseURL == "" {
@@ -732,6 +778,12 @@ func createVisionLLM() (llms.Model, error) {
 				openai.WithAPIType(openai.APITypeAzure),
 				openai.WithBaseURL(baseURL),
 			)
+		} else {
+			// Handle generic OpenAI-compatible endpoints (like LiteLLM)
+			baseURL := os.Getenv("OPENAI_BASE_URL")
+			if baseURL != "" {
+				options = append(options, openai.WithBaseURL(baseURL))
+			}
 		}
 
 		return openai.New(options...)

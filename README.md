@@ -153,6 +153,12 @@ services:
       # OLLAMA_HOST: "http://host.docker.internal:11434"
       # TOKEN_LIMIT: 1000 # Recommended for smaller models
       
+      # Option 4: Google AI (Gemini)
+      # LLM_PROVIDER: "googleai"
+      # LLM_MODEL: "gemini-1.5-flash-latest" # Or other Gemini model
+      # GOOGLEAI_API_KEY: "your_google_ai_api_key"
+      # GOOGLEAI_THINKING_BUDGET: "0" # Optional, set to 0 to disable thinking
+
       # Optional LLM Settings
       # LLM_LANGUAGE: "English" # Optional, default: English
 
@@ -179,7 +185,11 @@ services:
       # AZURE_DOCAI_OUTPUT_CONTENT_FORMAT: 'text' # Optional, defaults to 'text', other valid option is 'markdown'
               # 'markdown' requires the 'prebuilt-layout' model
 
-      # Enhanced OCR Features
+      # Option 4: Docling Server
+      # OCR_PROVIDER: 'docling'              # Use a Docling server
+      # DOCLING_URL: 'http://your-docling-server:port' # URL of your Docling instance
+
+      # Enhanced OCR Features (Currently Google Document AI only)
       CREATE_LOCAL_HOCR: "false" # Optional, save hOCR files locally
       LOCAL_HOCR_PATH: "/app/hocr" # Optional, path for hOCR files
       CREATE_LOCAL_PDF: "false" # Optional, save enhanced PDFs locally
@@ -189,10 +199,6 @@ services:
       PDF_COPY_METADATA: "true" # Optional, copy metadata from original document
       PDF_OCR_TAGGING: "true" # Optional, add tag to processed documents
       PDF_OCR_COMPLETE_TAG: "paperless-gpt-ocr-complete" # Optional, tag name
-
-      # Option 4: Docling Server
-      # OCR_PROVIDER: 'docling'              # Use a Docling server
-      # DOCLING_URL: 'http://your-docling-server:port' # URL of your Docling instance
 
       AUTO_OCR_TAG: "paperless-gpt-ocr-auto" # Optional, default: paperless-gpt-ocr-auto
       OCR_LIMIT_PAGES: "5" # Optional, default: 5. Set to 0 for no limit.
@@ -441,14 +447,16 @@ For best results with the enhanced OCR features:
 | `PAPERLESS_PUBLIC_URL`           | Public URL for Paperless (if different from `PAPERLESS_BASE_URL`).                                               | No       |                        |
 | `MANUAL_TAG`                     | Tag for manual processing.                                                                                       | No       | paperless-gpt          |
 | `AUTO_TAG`                       | Tag for auto processing.                                                                                         | No       | paperless-gpt-auto     |
-| `LLM_PROVIDER`                   | AI backend (`openai` or `ollama`).                                                                               | Yes      |                        |
+| `LLM_PROVIDER`                   | AI backend (`openai`, `ollama`, or `googleai`).                                                                  | Yes      |                        |
 | `LLM_MODEL`                      | AI model name, e.g. `gpt-4o`, `gpt-3.5-turbo`, `deepseek-r1:8b`.                                                 | Yes      |                        |
 | `OPENAI_API_KEY`                 | OpenAI API key (required if using OpenAI).                                                                       | Cond.    |                        |
 | `OPENAI_API_TYPE`                | Set to `azure` to use Azure OpenAI Service.                                                                      | No       |                        |
-| `OPENAI_BASE_URL`                | Base URL for OpenAI API. For Azure OpenAI, set to your deployment URL (e.g., `https://your-resource.openai.azure.com`). | No       |                        |
+| `OPENAI_BASE_URL`                | Base URL for OpenAI API. For Azure OpenAI, set to your deployment URL (e.g., `https://your-resource.openai.azure.com`). For custom endpoints (like LiteLLM), set this URL. | No       |                        |
+| `GOOGLEAI_API_KEY`               | Google Gemini API key (required if using `LLM_PROVIDER=googleai`).                                               | Cond.    |                        |
+| `GOOGLEAI_THINKING_BUDGET`       | (Optional, googleai only) Integer. Controls Gemini "thinking" budget. If unset, model default is used (thinking enabled if supported). Set to `0` to disable thinking (if model supports it). | No |                        |
 | `LLM_LANGUAGE`                   | Likely language for documents (e.g. `English`).                                                                  | No       | English                |
 | `OLLAMA_HOST`                    | Ollama server URL (e.g. `http://host.docker.internal:11434`).                                                    | No       |                        |
-| `OCR_PROVIDER`                   | OCR provider to use (`llm`, `azure`, or `google_docai`).                                                         | No       | llm                    |
+| `OCR_PROVIDER`                   | OCR provider to use (`llm`, `azure`, `google_docai`, or `docling`).                                              | No       | llm                    |
 | `VISION_LLM_PROVIDER`            | AI backend for LLM OCR (`openai` or `ollama`). Required if OCR_PROVIDER is `llm`.                                | Cond.    |                        |
 | `VISION_LLM_MODEL`               | Model name for LLM OCR (e.g. `minicpm-v`). Required if OCR_PROVIDER is `llm`.                                    | Cond.    |                        |
 | `AZURE_DOCAI_ENDPOINT`           | Azure Document Intelligence endpoint. Required if OCR_PROVIDER is `azure`.                                        | Cond.    |                        |
