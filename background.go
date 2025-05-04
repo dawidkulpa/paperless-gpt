@@ -163,7 +163,6 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 		docLogger := documentLogger(document.ID)
 		docLogger.Info("Processing document for OCR")
 
-<<<<<<< HEAD
 		// Skip OCR if the document already has the OCR complete tag and tagging is enabled
 		if app.pdfOCRTagging {
 			hasCompleteTag := false
@@ -209,9 +208,6 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 
 		// Call ProcessDocumentOCR with options and an empty jobID
 		processedDoc, err := app.ProcessDocumentOCR(ctx, document.ID, options, "")
-=======
-		_, ocrContent, err := app.ProcessDocumentOCR(ctx, document.ID, "")
->>>>>>> 20ce7db (adds tweaks for OCR: configuring ollama model, showing per page result, allowing re-ocring single page)
 		if err != nil {
 			docLogger.Errorf("OCR processing failed: %v", err)
 			errs = append(errs, fmt.Errorf("document %d OCR error: %w", document.ID, err))
