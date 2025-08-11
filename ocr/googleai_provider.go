@@ -112,7 +112,8 @@ func (p *GoogleAIProvider) GenerateContent(ctx context.Context, messages []llms.
 	if p.thinkingBudget != nil {
 		genConfig = &genai.GenerateContentConfig{
 			ThinkingConfig: &genai.ThinkingConfig{
-				ThinkingBudget: genai.Ptr(*p.thinkingBudget),
+				IncludeThoughts: false,
+				ThinkingBudget:  genai.Ptr(*p.thinkingBudget),
 			},
 		}
 	}

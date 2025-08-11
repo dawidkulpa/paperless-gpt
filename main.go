@@ -20,7 +20,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 	"github.com/tmc/langchaingo/llms"
-	"github.com/tmc/langchaingo/llms/googleai"
 	"github.com/tmc/langchaingo/llms/ollama"
 	"github.com/tmc/langchaingo/llms/openai"
 	"gorm.io/gorm"
@@ -716,22 +715,6 @@ func loadTemplates() {
 	}
 }
 
-// NewGoogleAIProvider creates a new Google AI LLM provider.
-// Note: This is a basic implementation based on the langchaingo structure.
-// Adjustments might be needed depending on the exact langchaingo API.
-func NewGoogleAIProvider(ctx context.Context, modelName string, apiKey string, thinkingBudget *int32) (llms.Model, error) {
-	opts := []googleai.Option{
-		googleai.WithAPIKey(apiKey),
-		googleai.WithDefaultModel(modelName),
-	}
-	// Assuming langchaingo's googleai package handles the thinking budget via options if available.
-	// If not, this part might need adjustment based on the library's specifics.
-	// if thinkingBudget != nil {
-	// 	// Add option for thinking budget if the library supports it
-	// }
-	return googleai.New(ctx, opts...)
-}
-
 // createLLM creates the appropriate LLM client based on the provider
 func createLLM() (llms.Model, error) {
 	switch strings.ToLower(llmProvider) {
@@ -787,10 +770,10 @@ func createLLM() (llms.Model, error) {
 				thinkingBudget = &b
 			}
 		}
-		// Note: Using the NewGoogleAIProvider defined in this file
-		provider, err := NewGoogleAIProvider(ctx, llmModel, apiKey, thinkingBudget)
+		// Use the custom provider from the ocr package
+		provider, err := ocr.NewGoogleAIProvider(ctx, llmModel, apiKey, thinkingBudget)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create GoogleAI provider: %w", err)
+			return nil, fmt.Errorf("failed to create custom GoogleAI provider: %w", err)
 		}
 		return provider, nil
 	default:

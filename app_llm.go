@@ -136,6 +136,11 @@ func (app *App) getSuggestedTags(
 		return nil, fmt.Errorf("error getting response from LLM: %v", err)
 	}
 
+	for i, choice := range completion.Choices {
+		logger.Debugf("Tags llm's response: Choice[%d]: Content=%s, StopReason=%s, GenerationInfo=%v, ReasoningContent=%s",
+			i, choice.Content, choice.StopReason, choice.GenerationInfo, choice.ReasoningContent)
+	}
+
 	response := stripReasoning(completion.Choices[0].Content)
 
 	suggestedTags := strings.Split(response, ",")
@@ -214,6 +219,10 @@ func (app *App) getSuggestedTitle(ctx context.Context, content string, originalT
 	})
 	if err != nil {
 		return "", fmt.Errorf("error getting response from LLM: %v", err)
+	}
+	for i, choice := range completion.Choices {
+		logger.Debugf("Title llm's response: Choice[%d]: Content=%s, StopReason=%s, GenerationInfo=%v, ReasoningContent=%s",
+			i, choice.Content, choice.StopReason, choice.GenerationInfo, choice.ReasoningContent)
 	}
 	result := stripReasoning(completion.Choices[0].Content)
 	return strings.TrimSpace(strings.Trim(result, "\"")), nil

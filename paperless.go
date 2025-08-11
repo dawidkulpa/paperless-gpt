@@ -415,14 +415,21 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 		}
 
 		if len(tags) == 0 {
+			// No suggested tags, use original tags minus removed tags, plus added tags
 			tags = originalTags
+			if len(document.AddTags) > 0 {
+				tags = append(tags, document.AddTags...)
+			}
+			// Ensure no duplicates and sort
+			slices.Sort(tags)
+			tags = slices.Compact(tags)
 		} else {
 			// We have suggested tags to change
-			originalFields["tags"] = originalTags
+			originalFields["tags"] = originalTags // Store original tags before modification
 			// remove autoTag to prevent infinite loop - this is required in case of undo
 			tags = removeTagFromList(tags, autoTag)
 
-			// remove duplicates
+			// remove duplicates from suggested tags
 			slices.Sort(tags)
 			tags = slices.Compact(tags)
 		}
